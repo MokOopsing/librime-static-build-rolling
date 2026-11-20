@@ -33,15 +33,13 @@ jobs:
           docker run --rm \
             -v "$GITHUB_WORKSPACE/librime:/src" \
             -w /src \
-            -e BOOST_ROOT=/src/deps/boost \
-            -e BOOST_INSTALL_PREFIX=/src/dist \
-            -e boost_libs=regex \
-            -e boost_link=static \
             alpine:3.23 sh -euxc '
               apk add --no-cache bash build-base cmake ninja curl tar python3 linux-headers git perl-utils
               export CMAKE_GENERATOR=Ninja
 
-              ./install-boost.sh --download --build
+              ./install-boost.sh --download
+              ./deps/boost/b2 -q -a --with-regex variant=release link=static --prefix=/src/dist install
+              test -f dist/lib/libboost_regex.a
               make -f deps.mk leveldb marisa-trie opencc yaml-cpp prefix=/src/dist
               bash install-plugins.sh hchunhui/librime-lua lotem/librime-octagram
               (cd plugins/lua && bash action-install.sh)
@@ -51,7 +49,7 @@ jobs:
                 -DCMAKE_INSTALL_PREFIX=/src/dist \
                 -DCMAKE_PREFIX_PATH=/src/dist \
                 -DBoost_NO_BOOST_CMAKE=ON \
-                -DBOOST_ROOT=/src/deps/boost \
+                -DBoost_ROOT=/src/dist \
                 -DBOOST_LIBRARYDIR=/src/dist/lib \
                 -DBUILD_STATIC=ON \
                 -DBUILD_SHARED_LIBS=OFF \
