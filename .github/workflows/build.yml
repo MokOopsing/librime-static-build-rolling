@@ -65,7 +65,7 @@ jobs:
                 -DBUILD_STATIC=ON \
                 -DBUILD_SHARED_LIBS=ON \
                 -DBUILD_TEST=OFF \
-                -DENABLE_EXTERNAL_PLUGINS=OFF
+                -DENABLE_EXTERNAL_PLUGINS=ON
               cmake --build build-shared
               cmake --install build-shared
               test -f dist/lib64/librime.so
