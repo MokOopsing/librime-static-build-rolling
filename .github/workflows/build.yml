@@ -44,10 +44,10 @@ jobs:
 
               ./install-boost.sh --download
               (cd deps/boost && ./b2 -q -a --with-regex variant=release link=static cxxflags=-fPIC stage)
-              mkdir -p dist/include dist/lib
+              mkdir -p dist/include dist/lib64
               cp -a deps/boost/boost dist/include/
-              cp deps/boost/stage/lib/libboost_regex.a dist/lib/
-              test -f dist/lib/libboost_regex.a
+              cp deps/boost/stage/lib/libboost_regex.a dist/lib64/
+              test -f dist/lib64/libboost_regex.a
               make -f deps.mk leveldb marisa-trie opencc yaml-cpp prefix=/src/dist
               bash install-plugins.sh hchunhui/librime-lua lotem/librime-octagram
               (cd plugins/lua && bash action-install.sh)
@@ -55,21 +55,22 @@ jobs:
               cmake -S . -B build-shared \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX=/src/dist \
+                -DCMAKE_INSTALL_LIBDIR=lib64 \
                 -DCMAKE_PREFIX_PATH=/src/dist \
                 -DBoost_NO_BOOST_CMAKE=ON \
                 -DBoost_ROOT=/src/dist \
-                -DBOOST_LIBRARYDIR=/src/dist/lib \
+                -DBOOST_LIBRARYDIR=/src/dist/lib64 \
                 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                 -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
                 -DBUILD_STATIC=ON \
                 -DBUILD_SHARED_LIBS=ON \
                 -DBUILD_TEST=OFF \
                 -DENABLE_EXTERNAL_PLUGINS=OFF
-              cmake --build build-shared --target rime spdlog
+              cmake --build build-shared
               cmake --install build-shared
-              test -f dist/lib/librime.so
+              test -f dist/lib64/librime.so
 
-              max_glibc="$(readelf --version-info dist/lib/librime.so \
+              max_glibc="$(readelf --version-info dist/lib64/librime.so \
                 | grep -oE "GLIBC_[0-9]+(\\.[0-9]+)+" \
                 | cut -d_ -f2 | sort -Vu | tail -n 1)"
               test -n "$max_glibc"
@@ -78,7 +79,7 @@ jobs:
                 exit 1
               fi
 
-              ldd -r dist/lib/librime.so | tee build-shared/librime-ldd.txt
+              ldd -r dist/lib64/librime.so | tee build-shared/librime-ldd.txt
               if grep -E "not found|lib(boost|leveldb|marisa|opencc|yaml-cpp|stdc\\+\\+|gcc_s).*=>" build-shared/librime-ldd.txt; then
                 echo "Unexpected runtime dependency in librime.so" >&2
                 exit 1
@@ -88,7 +89,7 @@ jobs:
               #include <rime_api.h>
               int main() { return rime_get_api() ? 0 : 1; }
               EOF
-              c++ -I dist/include -L dist/lib -Wl,-rpath,/src/dist/lib \
+              c++ -I dist/include -L dist/lib64 -Wl,-rpath,/src/dist/lib64 \
                 -o build-shared/rime-shared-smoke \
                 build-shared/shared-link-smoke.cc -lrime
               build-shared/rime-shared-smoke
