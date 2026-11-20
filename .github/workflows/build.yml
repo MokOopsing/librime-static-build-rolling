@@ -1,0 +1,95 @@
+name: Scheduled static librime build
+
+on:
+  schedule:
+    - cron: "15 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout librime source
+        uses: actions/checkout@v7
+        with:
+          repository: rime/librime
+          ref: master
+          path: librime
+          submodules: recursive
+
+      - name: Build static musl bundle
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/librime:/src" \
+            -w /src \
+            -e BOOST_ROOT=/src/deps/boost \
+            -e BOOST_INSTALL_PREFIX=/src/dist \
+            -e boost_libs=regex \
+            -e boost_link=static \
+            alpine:3.23 sh -euxc '
+              apk add --no-cache bash build-base cmake ninja curl tar python3 linux-headers git
+              export CMAKE_GENERATOR=Ninja
+
+              ./install-boost.sh --download --build
+              make -f deps.mk leveldb marisa-trie opencc yaml-cpp prefix=/src/dist
+              bash install-plugins.sh hchunhui/librime-lua lotem/librime-octagram
+              (cd plugins/lua && bash action-install.sh)
+
+              cmake -S . -B build-static \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX=/src/dist \
+                -DCMAKE_PREFIX_PATH=/src/dist \
+                -DBoost_NO_BOOST_CMAKE=ON \
+                -DBOOST_ROOT=/src/deps/boost \
+                -DBOOST_LIBRARYDIR=/src/dist/lib \
+                -DBUILD_STATIC=ON \
+                -DBUILD_SHARED_LIBS=OFF \
+                -DBUILD_TEST=OFF \
+                -DENABLE_EXTERNAL_PLUGINS=OFF
+              cmake --build build-static --target rime-static spdlog
+              cmake --install build-static
+              cp build-static/deps/spdlog/libspdlog.a dist/lib/
+              test -f dist/lib/librime.a
+              if find dist/lib -type f \( -name "*.so" -o -name "*.so.*" \) | grep -q .; then
+                echo "Unexpected shared library in static bundle" >&2
+                exit 1
+              fi
+
+              cat > build-static/static-link-smoke.cc << "EOF"
+              #include <rime_api.h>
+              int main() { return rime_get_api() ? 0 : 1; }
+              EOF
+              c++ -static -I dist/include \
+                -o build-static/rime-static-smoke \
+                build-static/static-link-smoke.cc \
+                -Wl,--start-group dist/lib/*.a -Wl,--end-group -pthread
+              if readelf -l build-static/rime-static-smoke | grep -q INTERP; then
+                echo "Smoke binary is not fully static" >&2
+                exit 1
+              fi
+              build-static/rime-static-smoke
+            '
+
+      - name: Package distributable
+        run: |
+          ref_name="$(git -C librime describe --always --tags)"
+          tar -czf "rime-${ref_name}-Linux-musl-${{ matrix.arch }}.tar.gz" -C librime/dist .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rime-static-linux-${{ matrix.arch }}-${{ github.run_number }}
+          path: rime-*-Linux-musl-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
