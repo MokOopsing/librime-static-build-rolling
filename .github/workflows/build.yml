@@ -38,7 +38,10 @@ jobs:
               export CMAKE_GENERATOR=Ninja
 
               ./install-boost.sh --download
-              (cd deps/boost && ./b2 -q -a --with-regex variant=release link=static --prefix=/src/dist install)
+              (cd deps/boost && ./b2 -q -a --with-regex variant=release link=static stage)
+              mkdir -p dist/include dist/lib
+              cp -a deps/boost/boost dist/include/
+              cp deps/boost/stage/lib/libboost_regex.a dist/lib/
               test -f dist/lib/libboost_regex.a
               make -f deps.mk leveldb marisa-trie opencc yaml-cpp prefix=/src/dist
               bash install-plugins.sh hchunhui/librime-lua lotem/librime-octagram
