@@ -1,4 +1,4 @@
-name: Scheduled static librime build
+name: Scheduled UOS-compatible librime build
 
 on:
   schedule:
@@ -16,8 +16,10 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
+            image: quay.io/pypa/manylinux_2_28_x86_64
           - arch: aarch64
             runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout librime source
@@ -28,17 +30,20 @@ jobs:
           path: librime
           submodules: recursive
 
-      - name: Build static musl bundle
+      - name: Build glibc 2.28 shared bundle
         run: |
           docker run --rm \
             -v "$GITHUB_WORKSPACE/librime:/src" \
             -w /src \
-            alpine:3.23 sh -euxc '
-              apk add --no-cache bash build-base cmake ninja curl tar python3 linux-headers git perl-utils
-              export CMAKE_GENERATOR=Ninja
+            --entrypoint /bin/bash \
+            ${{ matrix.image }} -euxo pipefail -c '
+              yum install -y git curl tar perl-Digest-SHA
+              export CMAKE_GENERATOR="Unix Makefiles"
+              export CFLAGS="-fPIC"
+              export CXXFLAGS="-fPIC"
 
               ./install-boost.sh --download
-              (cd deps/boost && ./b2 -q -a --with-regex variant=release link=static stage)
+              (cd deps/boost && ./b2 -q -a --with-regex variant=release link=static cxxflags=-fPIC stage)
               mkdir -p dist/include dist/lib
               cp -a deps/boost/boost dist/include/
               cp deps/boost/stage/lib/libboost_regex.a dist/lib/
@@ -47,50 +52,57 @@ jobs:
               bash install-plugins.sh hchunhui/librime-lua lotem/librime-octagram
               (cd plugins/lua && bash action-install.sh)
 
-              cmake -S . -B build-static \
+              cmake -S . -B build-shared \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX=/src/dist \
                 -DCMAKE_PREFIX_PATH=/src/dist \
                 -DBoost_NO_BOOST_CMAKE=ON \
                 -DBoost_ROOT=/src/dist \
                 -DBOOST_LIBRARYDIR=/src/dist/lib \
+                -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
                 -DBUILD_STATIC=ON \
-                -DBUILD_SHARED_LIBS=OFF \
+                -DBUILD_SHARED_LIBS=ON \
                 -DBUILD_TEST=OFF \
                 -DENABLE_EXTERNAL_PLUGINS=OFF
-              cmake --build build-static --target rime-static spdlog
-              cmake --install build-static
-              cp build-static/deps/spdlog/libspdlog.a dist/lib/
-              test -f dist/lib/librime.a
-              if find dist/lib -type f \( -name "*.so" -o -name "*.so.*" \) | grep -q .; then
-                echo "Unexpected shared library in static bundle" >&2
+              cmake --build build-shared --target rime spdlog
+              cmake --install build-shared
+              test -f dist/lib/librime.so
+
+              max_glibc="$(readelf --version-info dist/lib/librime.so \
+                | grep -oE "GLIBC_[0-9]+(\\.[0-9]+)+" \
+                | cut -d_ -f2 | sort -Vu | tail -n 1)"
+              test -n "$max_glibc"
+              if [ "$(printf "%s\n" "$max_glibc" 2.28 | sort -V | tail -n 1)" != "2.28" ]; then
+                echo "librime.so requires GLIBC_${max_glibc}, newer than UOS GLIBC_2.28" >&2
                 exit 1
               fi
 
-              cat > build-static/static-link-smoke.cc << "EOF"
+              ldd -r dist/lib/librime.so | tee build-shared/librime-ldd.txt
+              if grep -E "not found|lib(boost|leveldb|marisa|opencc|yaml-cpp|stdc\\+\\+|gcc_s).*=>" build-shared/librime-ldd.txt; then
+                echo "Unexpected runtime dependency in librime.so" >&2
+                exit 1
+              fi
+
+              cat > build-shared/shared-link-smoke.cc << "EOF"
               #include <rime_api.h>
               int main() { return rime_get_api() ? 0 : 1; }
               EOF
-              c++ -static -I dist/include \
-                -o build-static/rime-static-smoke \
-                build-static/static-link-smoke.cc \
-                -Wl,--start-group dist/lib/*.a -Wl,--end-group -pthread
-              if readelf -l build-static/rime-static-smoke | grep -q INTERP; then
-                echo "Smoke binary is not fully static" >&2
-                exit 1
-              fi
-              build-static/rime-static-smoke
+              c++ -I dist/include -L dist/lib -Wl,-rpath,/src/dist/lib \
+                -o build-shared/rime-shared-smoke \
+                build-shared/shared-link-smoke.cc -lrime
+              build-shared/rime-shared-smoke
             '
 
       - name: Package distributable
         run: |
           ref_name="$(git -C librime describe --always --tags)"
-          tar -czf "rime-${ref_name}-Linux-musl-${{ matrix.arch }}.tar.gz" -C librime/dist .
+          tar -czf "rime-${ref_name}-Linux-glibc228-${{ matrix.arch }}.tar.gz" -C librime/dist .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rime-static-linux-${{ matrix.arch }}-${{ github.run_number }}
-          path: rime-*-Linux-musl-${{ matrix.arch }}.tar.gz
+          name: rime-uos-glibc228-${{ matrix.arch }}-${{ github.run_number }}
+          path: rime-*-Linux-glibc228-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
           retention-days: 30
