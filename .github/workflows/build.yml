@@ -38,7 +38,7 @@ jobs:
             -e boost_libs=regex \
             -e boost_link=static \
             alpine:3.23 sh -euxc '
-              apk add --no-cache bash build-base cmake ninja curl tar python3 linux-headers git
+              apk add --no-cache bash build-base cmake ninja curl tar python3 linux-headers git perl-utils
               export CMAKE_GENERATOR=Ninja
 
               ./install-boost.sh --download --build
